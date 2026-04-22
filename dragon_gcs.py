@@ -13,8 +13,7 @@ Protocol (PC → Pi, newline-delimited JSON):
 
 import pygame
 import pygame.font
-import serial
-import serial.tools.list_ports
+import socket
 import json
 import threading
 import time
@@ -35,7 +34,8 @@ import sys
 WINDOW_W = 1400
 WINDOW_H = 900
 FPS = 60
-SERIAL_BAUD = 115200
+TCP_HOST = "192.168.208.10"
+TCP_PORT = 5000
 LOG_DIR = os.path.expanduser("~/dragon_logs")
 
 # Colors — deep-sea industrial palette
@@ -79,14 +79,15 @@ class DataLogger:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SERIAL MANAGER
+# TCP MANAGER
 # ─────────────────────────────────────────────────────────────────────────────
 
-class SerialManager:
+class TCPManager:
     def __init__(self, logger: DataLogger):
         self.logger = logger
+        self.host = None
         self.port = None
-        self.ser = None
+        self.sock = None
         self.connected = False
         self._lock = threading.Lock()
         self._rx_thread = None
@@ -96,29 +97,33 @@ class SerialManager:
         self.on_status = None      # callback(str)
         self._partial = ""
 
-    def list_ports(self):
-        return [p.device for p in serial.tools.list_ports.comports()]
-
-    def connect(self, port: str):
+    def connect(self, host: str, port: int):
         try:
-            self.ser = serial.Serial(port, SERIAL_BAUD, timeout=0.1)
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(5.0)
+            self.sock.connect((host, port))
+            self.sock.settimeout(None)
+            self.host = host
             self.port = port
             self.connected = True
             self._running = True
             self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
             self._rx_thread.start()
-            self.logger.log_event("serial_connect", {"port": port, "baud": SERIAL_BAUD})
+            self.logger.log_event("tcp_connect", {"host": host, "port": port})
             return True
         except Exception as e:
-            self.logger.log_event("serial_error", {"error": str(e)})
+            self.logger.log_event("tcp_error", {"error": str(e)})
             return False
 
     def disconnect(self):
         self._running = False
         self.connected = False
-        if self.ser and self.ser.is_open:
-            self.ser.close()
-        self.logger.log_event("serial_disconnect", {})
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+        self.logger.log_event("tcp_disconnect", {})
 
     def send(self, data: dict):
         if not self.connected:
@@ -126,16 +131,19 @@ class SerialManager:
         try:
             line = json.dumps(data) + "\n"
             with self._lock:
-                self.ser.write(line.encode())
+                self.sock.sendall(line.encode())
         except Exception as e:
-            self.logger.log_event("serial_tx_error", {"error": str(e)})
+            self.logger.log_event("tcp_tx_error", {"error": str(e)})
+            self.connected = False
 
     def _rx_loop(self):
+        self.sock.settimeout(0.1)
         while self._running:
             try:
-                raw = self.ser.read(4096).decode("utf-8", errors="replace")
+                raw = self.sock.recv(4096).decode("utf-8", errors="replace")
                 if not raw:
-                    continue
+                    self.connected = False
+                    break
                 self._partial += raw
                 while "\n" in self._partial:
                     line, self._partial = self._partial.split("\n", 1)
@@ -147,6 +155,8 @@ class SerialManager:
                         self._dispatch(msg)
                     except json.JSONDecodeError:
                         pass
+            except socket.timeout:
+                continue
             except Exception:
                 time.sleep(0.05)
 
@@ -381,12 +391,6 @@ class ControllerOverlay(Overlay):
             if y + 22 > self.rect.h:
                 break
 
-
-        # lights = ctrl.get("lights", False)
-        # lcol = C_WARN if lights else C_TEXT_DIM
-        # ltxt = self.fonts["tiny"].render(f"LIGHTS {'ON' if lights else 'OFF'}", True, lcol)
-        # panel.blit(ltxt, (10, y))
-
         surface.blit(panel, self.rect.topleft)
 
 
@@ -409,14 +413,14 @@ class StatusBarOverlay(Overlay):
         pygame.draw.rect(panel, C_BORDER2, (0, 0, self.rect.w, 1))
 
         x = 10
-        # Serial status
-        ser_ok = state.get("serial_connected", False)
-        col = C_GREEN if ser_ok else C_DANGER
+        # TCP status
+        tcp_ok = state.get("tcp_connected", False)
+        col = C_GREEN if tcp_ok else C_DANGER
         dot = self.fonts["small"].render("●", True, col)
         panel.blit(dot, (x, 6))
         x += 16
-        port = state.get("serial_port", "---")
-        txt = self.fonts["small"].render(f"SERIAL {port}", True, C_TEXT)
+        addr = state.get("tcp_addr", "---")
+        txt = self.fonts["small"].render(f"TCP {addr}", True, C_TEXT)
         panel.blit(txt, (x, 6))
         x += txt.get_width() + 20
 
@@ -449,14 +453,14 @@ class StatusBarOverlay(Overlay):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PORT SELECTOR DIALOG
+# CONNECTION SELECTOR DIALOG
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PortSelector:
-    def __init__(self, screen, fonts, ports):
+class ConnectionSelector:
+    def __init__(self, screen, fonts):
         self.screen = screen
         self.fonts = fonts
-        self.ports = ports + ["DEMO MODE"]
+        self.options = [f"{TCP_HOST}:{TCP_PORT}", "DEMO MODE"]
         self.selected = 0
         self.done = False
         self.choice = None
@@ -466,37 +470,35 @@ class PortSelector:
             if ev.key == pygame.K_UP:
                 self.selected = max(0, self.selected - 1)
             elif ev.key == pygame.K_DOWN:
-                self.selected = min(len(self.ports)-1, self.selected+1)
+                self.selected = min(len(self.options)-1, self.selected+1)
             elif ev.key == pygame.K_RETURN:
-                self.choice = self.ports[self.selected]
+                self.choice = self.options[self.selected]
                 self.done = True
             elif ev.key == pygame.K_ESCAPE:
                 self.done = True
         if ev.type == pygame.MOUSEBUTTONDOWN:
             mx, my = ev.pos
-            for i, p in enumerate(self.ports):
+            for i, opt in enumerate(self.options):
                 ry = 220 + i * 44
                 if ry <= my <= ry + 36:
                     self.selected = i
-                    self.choice = p
+                    self.choice = opt
                     self.done = True
 
     def draw(self):
         w, h = self.screen.get_size()
         self.screen.fill(C_BG)
-        # Title
         title = self.fonts["title"].render("DRAGON GCS", True, C_ACCENT)
-        sub = self.fonts["body"].render("Select serial port to connect", True, C_TEXT_DIM)
+        sub = self.fonts["body"].render("Select connection", True, C_TEXT_DIM)
         self.screen.blit(title, (w//2 - title.get_width()//2, 80))
         self.screen.blit(sub, (w//2 - sub.get_width()//2, 140))
 
-        # Port list
-        for i, port in enumerate(self.ports):
+        for i, opt in enumerate(self.options):
             ry = 220 + i * 44
             col = C_ACCENT if i == self.selected else C_PANEL
             pygame.draw.rect(self.screen, col, (w//2-200, ry, 400, 36), border_radius=4)
             pygame.draw.rect(self.screen, C_BORDER2, (w//2-200, ry, 400, 36), 1, border_radius=4)
-            txt = self.fonts["body"].render(port, True, C_BG if i == self.selected else C_TEXT)
+            txt = self.fonts["body"].render(opt, True, C_BG if i == self.selected else C_TEXT)
             self.screen.blit(txt, (w//2 - txt.get_width()//2, ry + 8))
 
         hint = self.fonts["tiny"].render("↑↓ to navigate · ENTER to connect · ESC to quit", True, C_TEXT_DIM)
@@ -579,7 +581,7 @@ class DragonGCS:
 
         self.fonts = self._load_fonts()
         self.logger = DataLogger()
-        self.serial = SerialManager(self.logger)
+        self.tcp = TCPManager(self.logger)
         self.controller = ControllerInput()
         self.demo = None
 
@@ -587,8 +589,8 @@ class DragonGCS:
         self.state = {
             "telemetry": {},
             "control": {},
-            "serial_connected": False,
-            "serial_port": "---",
+            "tcp_connected": False,
+            "tcp_addr": "---",
             "controller_connected": False,
             "log_path": self.logger.path,
         }
@@ -601,10 +603,10 @@ class DragonGCS:
         # Status messages
         self._status_msgs = []
 
-        # Wire serial callbacks
-        self.serial.on_telemetry = self._on_telemetry
-        self.serial.on_image = self._on_image
-        self.serial.on_status = self._on_status_msg
+        # Wire TCP callbacks
+        self.tcp.on_telemetry = self._on_telemetry
+        self.tcp.on_image = self._on_image
+        self.tcp.on_status = self._on_status_msg
 
         # Build overlays
         self.overlays = self._build_overlays()
@@ -633,7 +635,6 @@ class DragonGCS:
 
     def _build_overlays(self):
         W, H = WINDOW_W, WINDOW_H
-        # Camera area: full screen behind overlays
         telemetry = TelemetryOverlay(self.fonts, pygame.Rect(10, 10, 200, 200))
         horizon   = ArtificialHorizonOverlay(self.fonts, (W - 80, 80), 55)
         controller= ControllerOverlay(self.fonts, pygame.Rect(10, H - 190, 180, 150))
@@ -651,13 +652,11 @@ class DragonGCS:
             import numpy as np
             import cv2
 
-            # Decode JPEG bytes → OpenCV image (BGR)
             np_arr = np.frombuffer(img_bytes, np.uint8)
             frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
             if frame is None:
                 return
-
 
             W, H = self.screen.get_size()
             target_w = W
@@ -670,8 +669,6 @@ class DragonGCS:
             nh = int(h * scale)
 
             frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
-
-            # Convert BGR → RGB (pygame expects RGB)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             surf = pygame.image.frombuffer(frame.tobytes(), (nw, nh), "RGB")
@@ -682,16 +679,14 @@ class DragonGCS:
 
         except Exception:
             print("Failed to decode image data", file=sys.stderr)
-            pass
 
     def _on_status_msg(self, msg: str):
         self._statusbar.add_message(msg)
 
-    # ── Port selection ────────────────────────────────────────────────────────
+    # ── Connection selector ───────────────────────────────────────────────────
 
-    def _run_port_selector(self):
-        ports = self.serial.list_ports()
-        selector = PortSelector(self.screen, self.fonts, ports)
+    def _run_connection_selector(self):
+        selector = ConnectionSelector(self.screen, self.fonts)
         while not selector.done:
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
@@ -703,21 +698,22 @@ class DragonGCS:
 
     # ── Connect ───────────────────────────────────────────────────────────────
 
-    def _connect(self, port: str):
-        if port == "DEMO MODE":
+    def _connect(self, choice: str):
+        if choice == "DEMO MODE":
             self.demo = DemoGenerator(self._on_telemetry, self._on_image, self._on_status_msg)
             self.demo.start()
-            self.state["serial_connected"] = True
-            self.state["serial_port"] = "DEMO"
+            self.state["tcp_connected"] = True
+            self.state["tcp_addr"] = "DEMO"
             self._statusbar.add_message("Demo mode active — no hardware required")
         else:
-            ok = self.serial.connect(port)
-            self.state["serial_connected"] = ok
-            self.state["serial_port"] = port if ok else "ERR"
+            host, port = TCP_HOST, TCP_PORT
+            ok = self.tcp.connect(host, port)
+            self.state["tcp_connected"] = ok
+            self.state["tcp_addr"] = f"{host}:{port}" if ok else "ERR"
             if ok:
-                self._statusbar.add_message(f"Connected to {port}")
+                self._statusbar.add_message(f"Connected to {host}:{port}")
             else:
-                self._statusbar.add_message(f"Failed to open {port}")
+                self._statusbar.add_message(f"Failed to connect to {host}:{port}")
 
     # ── Control send ─────────────────────────────────────────────────────────
 
@@ -730,8 +726,8 @@ class DragonGCS:
         self.state["controller_connected"] = self.controller.connected
         if ctrl:
             self.state["control"] = ctrl
-            if self.serial.connected and self.demo is None:
-                self.serial.send(ctrl)
+            if self.tcp.connected and self.demo is None:
+                self.tcp.send(ctrl)
             self.logger.log_event("control_sent", ctrl)
 
     # ── Draw ─────────────────────────────────────────────────────────────────
@@ -748,13 +744,11 @@ class DragonGCS:
             cx = (W - cw) // 2
             cy = (H - 36 - ch) // 2
             self.screen.blit(cam, (cx, cy))
-            # Age indicator
             age = time.time() - self._last_image_ts
             if age > 2:
                 age_txt = self.fonts["tiny"].render(f"IMAGE {age:.0f}s OLD", True, C_WARN)
                 self.screen.blit(age_txt, (W//2 - age_txt.get_width()//2, 10))
         else:
-            # No feed placeholder
             msg = self.fonts["large"].render("NO VIDEO FEED", True, C_TEXT_DIM)
             self.screen.blit(msg, (W//2 - msg.get_width()//2, H//2 - msg.get_height()//2))
             sub = self.fonts["small"].render("Waiting for image data from Dragon...", True, C_TEXT_DIM)
@@ -763,7 +757,6 @@ class DragonGCS:
         # Scanline effect (subtle)
         scanline = pygame.Surface((W, 2), pygame.SRCALPHA)
         scanline.fill((0, 0, 0, 25))
-        t = int(time.time() * 60) % H
         for y in range(0, H, 4):
             self.screen.blit(scanline, (0, y))
 
@@ -780,12 +773,11 @@ class DragonGCS:
     # ── Resize ───────────────────────────────────────────────────────────────
 
     def _handle_resize(self, W, H):
-        # Reposition overlays
-        self.overlays[0].rect = pygame.Rect(10, 10, 200, 200)           # telemetry
-        self.overlays[1].center = (W - 80, 80)                           # horizon
+        self.overlays[0].rect = pygame.Rect(10, 10, 200, 200)
+        self.overlays[1].center = (W - 80, 80)
         self.overlays[1].rect = pygame.Rect(W-140, 10, 120, 150)
-        self.overlays[2].rect = pygame.Rect(10, H-190, 180, 150)         # controller
-        self.overlays[3].rect = pygame.Rect(0, H-36, W, 36)             # statusbar
+        self.overlays[2].rect = pygame.Rect(10, H-190, 180, 150)
+        self.overlays[3].rect = pygame.Rect(0, H-36, W, 36)
 
     # ── Key bindings ─────────────────────────────────────────────────────────
 
@@ -798,19 +790,16 @@ class DragonGCS:
             self.overlays[2].visible = not self.overlays[2].visible
         elif key == pygame.K_F11:
             pygame.display.toggle_fullscreen()
-        # elif key == pygame.K_l:
-        #     self._statusbar.add_message("Toggling lights")
-            self.controller.lights_on = not self.controller.lights_on
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def run(self):
-        port = self._run_port_selector()
-        if port is None:
+        choice = self._run_connection_selector()
+        if choice is None:
             pygame.quit()
             return
 
-        self._connect(port)
+        self._connect(choice)
 
         running = True
         while running:
@@ -826,6 +815,9 @@ class DragonGCS:
                     else:
                         self._handle_key(ev.key)
 
+            # Sync TCP connected state
+            self.state["tcp_connected"] = self.tcp.connected or (self.demo is not None)
+
             self._send_control()
             self._draw()
             self.clock.tick(FPS)
@@ -833,7 +825,7 @@ class DragonGCS:
         # Cleanup
         if self.demo:
             self.demo.stop()
-        self.serial.disconnect()
+        self.tcp.disconnect()
         self.logger.close()
         pygame.quit()
 

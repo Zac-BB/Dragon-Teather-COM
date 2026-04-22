@@ -1,15 +1,12 @@
 import socket
 import struct
 
-HOST = "0.0.0.0"
+HOST = "192.168.208.10"
 PORT = 5000
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((HOST, PORT))
-server.listen(1)
-
-conn, addr = server.accept()
-print("Connected:", addr)
+conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+conn.connect((HOST, PORT))
+print("Connected to", HOST, PORT)
 
 while True:
     # Receive sensor data

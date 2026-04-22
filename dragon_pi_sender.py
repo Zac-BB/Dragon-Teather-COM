@@ -1,23 +1,22 @@
 """
 dragon_pi_sender.py — Run this on the Raspberry Pi aboard Dragon.
 
-Reads camera frames, sensor data, and sends over serial to the GCS.
+Reads camera frames, sensor data, and sends over TCP to the GCS.
 Receives controller commands and drives motors.
 
 Dependencies:
-    pip install pyserial picamera2 smbus2
+    pip install opencv-python smbus2
 
 Customize the sensor reads and motor driver sections for your hardware.
 """
 
-import serial
+import socket
 import json
 import time
 import base64
 import io
 import threading
 import math
-
 
 try:
     import smbus2
@@ -27,9 +26,9 @@ except ImportError:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-SERIAL_PORT = "/dev/ttyAMA0"   # or /dev/ttyUSB0 for USB tether
+TCP_HOST = "0.0.0.0"   # listen on all interfaces
+TCP_PORT = 5000
 CAMERA_AVAILABLE = True
-SERIAL_BAUD = 115200
 CAMERA_WIDTH  = 640
 CAMERA_HEIGHT = 480
 CAMERA_JPEG_QUALITY = 70
@@ -39,21 +38,40 @@ IMAGE_HZ     = 30    # frames per second
 # MS5837 pressure/temp sensor (Bar30) — I2C address 0x76
 MS5837_ADDR = 0x76
 
-# ── Serial ────────────────────────────────────────────────────────────────────
+# ── TCP Server ────────────────────────────────────────────────────────────────
 
-ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=0.1)
+_conn = None
+_conn_lock = threading.Lock()
+
+def wait_for_connection():
+    global _conn
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((TCP_HOST, TCP_PORT))
+    server.listen(1)
+    print(f"[Dragon] Waiting for GCS on port {TCP_PORT}...")
+    conn, addr = server.accept()
+    print(f"[Dragon] GCS connected from {addr}")
+    with _conn_lock:
+        _conn = conn
+    return conn
 
 def send(data: dict):
-    line = json.dumps(data) + "\n"
-    ser.write(line.encode())
+    with _conn_lock:
+        conn = _conn
+    if conn is None:
+        return
+    try:
+        line = json.dumps(data) + "\n"
+        conn.sendall(line.encode())
+    except Exception as e:
+        print(f"[TX error] {e}")
+
+# ── Camera ────────────────────────────────────────────────────────────────────
 
 import cv2
 
-# ── Camera ──────────────────────────────────────────────────────────
-
-CAMERA_AVAILABLE = True
-
-cam = cv2.VideoCapture(0)  # 0 = default webcam
+cam = cv2.VideoCapture(0)
 
 if not cam.isOpened():
     CAMERA_AVAILABLE = False
@@ -69,18 +87,12 @@ def capture_jpeg() -> bytes:
         ret, frame = cam.read()
         if not ret:
             raise RuntimeError("Failed to capture frame")
-
-        # Encode as JPEG
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), CAMERA_JPEG_QUALITY]
         success, jpeg = cv2.imencode(".jpg", frame, encode_param)
-
         if not success:
             raise RuntimeError("JPEG encoding failed")
-
         return jpeg.tobytes()
-
     else:
-        # Synthetic fallback (same as before)
         from PIL import Image
         t = time.time()
         img = Image.new(
@@ -91,6 +103,7 @@ def capture_jpeg() -> bytes:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=50)
         return buf.getvalue()
+
 # ── Sensors ───────────────────────────────────────────────────────────────────
 
 _depth = 0.0
@@ -98,15 +111,11 @@ _pressure = 1.013
 _temp = 20.0
 
 def read_sensors():
-    """
-    Replace with actual I2C reads for your sensor suite.
-    Bar30 (MS5837): pressure + temp → compute depth
-    """
     global _depth, _pressure, _temp
     # TODO: replace with real I2C reads
     t = time.time()
     _pressure = 1.013 + 1.1 * abs(math.sin(t * 0.1))
-    _depth    = (_pressure - 1.013) / 0.0981  # approx depth in m (freshwater)
+    _depth    = (_pressure - 1.013) / 0.0981
     _temp     = 18.5 + 0.5 * math.sin(t * 0.07)
 
 def read_heading():
@@ -145,11 +154,15 @@ def apply_control(cmd: dict):
 
 _partial = ""
 
-def rx_loop():
+def rx_loop(conn):
     global _partial
+    conn.settimeout(0.1)
     while True:
         try:
-            raw = ser.read(4096).decode("utf-8", errors="replace")
+            raw = conn.recv(4096).decode("utf-8", errors="replace")
+            if not raw:
+                print("[Dragon] GCS disconnected.")
+                break
             _partial += raw
             while "\n" in _partial:
                 line, _partial = _partial.split("\n", 1)
@@ -162,16 +175,20 @@ def rx_loop():
                         apply_control(msg)
                 except json.JSONDecodeError:
                     pass
-        except Exception:
-            time.sleep(0.05)
+        except socket.timeout:
+            continue
+        except Exception as e:
+            print(f"[RX error] {e}")
+            break
 
-threading.Thread(target=rx_loop, daemon=True).start()
+# ── Main ──────────────────────────────────────────────────────────────────────
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+conn = wait_for_connection()
+threading.Thread(target=rx_loop, args=(conn,), daemon=True).start()
 
 send({"type": "status", "message": "Dragon online"})
 
-tele_interval = 1.0 / TELEMETRY_HZ
+tele_interval  = 1.0 / TELEMETRY_HZ
 image_interval = 1.0 / IMAGE_HZ
 last_tele  = 0.0
 last_image = 0.0
@@ -211,4 +228,5 @@ try:
 except KeyboardInterrupt:
     print("\n[Dragon] Shutting down.")
     if CAMERA_AVAILABLE:
-        cam.stop()
+        cam.release()
+    conn.close()
