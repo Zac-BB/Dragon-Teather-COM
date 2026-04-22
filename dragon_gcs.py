@@ -615,6 +615,9 @@ class DragonGCS:
         self._last_ctrl_send = 0
         self._ctrl_send_interval = 0.05  # 20 Hz
 
+        # Keyboard control state
+        self._keys = set()
+
     def _load_fonts(self):
         try:
             mono = "Courier New"
@@ -717,18 +720,33 @@ class DragonGCS:
 
     # ── Control send ─────────────────────────────────────────────────────────
 
+    def _keyboard_axes(self):
+        ud  = (1.0 if pygame.K_w in self._keys else 0.0) - (1.0 if pygame.K_s in self._keys else 0.0)
+        lr  = (1.0 if pygame.K_d in self._keys else 0.0) - (1.0 if pygame.K_a in self._keys else 0.0)
+        thr = (1.0 if pygame.K_r in self._keys else 0.0) - (1.0 if pygame.K_f in self._keys else 0.0)
+        return ud, lr, thr
+
     def _send_control(self):
         now = time.time()
         if now - self._last_ctrl_send < self._ctrl_send_interval:
             return
         self._last_ctrl_send = now
+
         ctrl = self.controller.refresh()
         self.state["controller_connected"] = self.controller.connected
-        if ctrl:
-            self.state["control"] = ctrl
-            if self.tcp.connected and self.demo is None:
-                self.tcp.send(ctrl)
-            self.logger.log_event("control_sent", ctrl)
+
+        if ctrl is None:
+            ctrl = {"type": "control", "up/down": 0.0, "left/right": 0.0, "throttle": 0.0}
+
+        kb_ud, kb_lr, kb_thr = self._keyboard_axes()
+        ctrl["up/down"]    = max(-1.0, min(1.0, ctrl["up/down"]    + kb_ud))
+        ctrl["left/right"] = max(-1.0, min(1.0, ctrl["left/right"] + kb_lr))
+        ctrl["throttle"]   = max(-1.0, min(1.0, ctrl["throttle"]   + kb_thr))
+
+        self.state["control"] = ctrl
+        if self.tcp.connected and self.demo is None:
+            self.tcp.send(ctrl)
+        self.logger.log_event("control_sent", ctrl)
 
     # ── Draw ─────────────────────────────────────────────────────────────────
 
@@ -810,10 +828,13 @@ class DragonGCS:
                     W, H = ev.w, ev.h
                     self._handle_resize(W, H)
                 elif ev.type == pygame.KEYDOWN:
+                    self._keys.add(ev.key)
                     if ev.key == pygame.K_ESCAPE:
                         running = False
                     else:
                         self._handle_key(ev.key)
+                elif ev.type == pygame.KEYUP:
+                    self._keys.discard(ev.key)
 
             # Sync TCP connected state
             self.state["tcp_connected"] = self.tcp.connected or (self.demo is not None)

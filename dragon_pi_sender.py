@@ -133,6 +133,7 @@ def apply_control(cmd: dict):
     Translate GCS command into thruster PWM signals.
     cmd keys: surge, sway, ascend, yaw, throttle, lights
     """
+    print(cmd)
     surge  = cmd.get("surge",  0.0)
     sway   = cmd.get("sway",   0.0)
     ascend = cmd.get("ascend", 0.0)
