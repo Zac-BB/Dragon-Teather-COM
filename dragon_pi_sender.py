@@ -114,25 +114,20 @@ def capture_jpeg() -> bytes:
 
 # ── Sensors ───────────────────────────────────────────────────────────────────
 
-_depth = 0.0
-_pressure = 1.013
-_temp = 20.0
-
 def read_sensors():
-    global _depth, _pressure, _temp
+
     # TODO: replace with real I2C reads
     t = time.time()
-    _pressure = 1.013 + 1.1 * abs(math.sin(t * 0.1))
-    _depth    = (_pressure - 1.013) / 0.0981
-    _temp     = 18.5 + 0.5 * math.sin(t * 0.07)
+    _pressure = 0.0
+    _depth    = 0.0
+    _temp     = 0.0
+    return {
+        "type": "telemetry",
+        "battery": 10,
+        
+        
+    }
 
-def read_heading():
-    """Replace with IMU read (BNO055, ICM-20689, etc.)"""
-    return (time.time() * 10) % 360, 0.0, 0.0   # heading, roll, pitch
-
-def read_battery():
-    """Replace with ADC read for battery voltage."""
-    return 87.0
 
 # ── Motor driver ──────────────────────────────────────────────────────────────
 
@@ -142,21 +137,14 @@ def apply_control(cmd: dict):
     cmd keys: surge, sway, ascend, yaw, throttle, lights
     """
     print(cmd)
-    surge  = cmd.get("surge",  0.0)
-    sway   = cmd.get("sway",   0.0)
-    ascend = cmd.get("ascend", 0.0)
-    yaw    = cmd.get("yaw",    0.0)
-    lights = cmd.get("lights", False)
-
-    # TODO: replace with your ESC / motor driver calls
-    # Example for BlueRobotics T200 thrusters via pigpio or RPi.GPIO PWM:
-    #   FL = surge + sway + yaw
-    #   FR = surge - sway - yaw
-    #   RL = surge - sway + yaw
-    #   RR = surge + sway - yaw
-    #   VL = ascend
-    #   VR = ascend
-    # Scale to 1100–1900 µs PWM and write to ESCs.
+    type  = cmd.get("control",  None)
+    ud   = cmd.get("up/down",   0.0)
+    lr = cmd.get("left/right", 0.0)
+    thro    = cmd.get("throttle",    0.0)
+    
+    ud_pwm = ud * 1500 + 1500
+    
+    
     pass
 
 # ── RX thread ─────────────────────────────────────────────────────────────────
@@ -210,19 +198,8 @@ try:
         now = time.time()
 
         if now - last_tele >= tele_interval:
-            read_sensors()
-            h, roll, pitch = read_heading()
-            batt = read_battery()
-            send({
-                "type":     "telemetry",
-                "depth":    round(_depth, 3),
-                "pressure": round(_pressure, 4),
-                "temp":     round(_temp, 2),
-                "heading":  round(h, 1),
-                "roll":     round(roll, 2),
-                "pitch":    round(pitch, 2),
-                "battery":  round(batt, 1),
-            })
+            data = read_sensors()
+            send(data)
             last_tele = now
 
         if now - last_image >= image_interval:
