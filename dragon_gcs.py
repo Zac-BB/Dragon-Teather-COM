@@ -270,6 +270,7 @@ class TelemetryOverlay(Overlay):
             ("HEADING",  f"{tele.get('heading',  0.0):6.1f}°",    C_TEXT),
             ("ROLL",     f"{tele.get('roll',     0.0):+6.1f}°",   C_TEXT),
             ("PITCH",    f"{tele.get('pitch',    0.0):+6.1f}°",   C_TEXT),
+            ("CURRENT",  f"{tele.get('current',   0.0):+6.1f}",   C_TEXT)
         ]
 
         batt = tele.get("battery", None)

@@ -118,12 +118,14 @@ def read_sensors():
 
     # TODO: replace with real I2C reads
     t = time.time()
-    _pressure = 0.0
-    _depth    = 0.0
-    _temp     = 0.0
+    pressure = 0.0
+    depth    = 0.0
+    temp     = 0.0
+    current = 0.0
     return {
         "type": "telemetry",
         "battery": 10,
+        "current": current,
         
         
     }
