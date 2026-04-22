@@ -43,18 +43,26 @@ MS5837_ADDR = 0x76
 _conn = None
 _conn_lock = threading.Lock()
 
-def wait_for_connection():
+_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+_server.bind((TCP_HOST, TCP_PORT))
+_server.listen(1)
+
+def _accept_loop():
     global _conn
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((TCP_HOST, TCP_PORT))
-    server.listen(1)
-    print(f"[Dragon] Waiting for GCS on port {TCP_PORT}...")
-    conn, addr = server.accept()
-    print(f"[Dragon] GCS connected from {addr}")
-    with _conn_lock:
-        _conn = conn
-    return conn
+    while True:
+        print(f"[Dragon] Waiting for GCS on port {TCP_PORT}...")
+        try:
+            conn, addr = _server.accept()
+        except Exception as e:
+            print(f"[Dragon] Accept error: {e}")
+            time.sleep(1)
+            continue
+        print(f"[Dragon] GCS connected from {addr}")
+        with _conn_lock:
+            _conn = conn
+        send({"type": "status", "message": "Dragon online"})
+        threading.Thread(target=rx_loop, args=(conn,), daemon=True).start()
 
 def send(data: dict):
     with _conn_lock:
@@ -181,13 +189,15 @@ def rx_loop(conn):
         except Exception as e:
             print(f"[RX error] {e}")
             break
+    with _conn_lock:
+        global _conn
+        if _conn is conn:
+            _conn = None
+    print("[Dragon] GCS disconnected, waiting for reconnect...")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-conn = wait_for_connection()
-threading.Thread(target=rx_loop, args=(conn,), daemon=True).start()
-
-send({"type": "status", "message": "Dragon online"})
+threading.Thread(target=_accept_loop, daemon=True).start()
 
 tele_interval  = 1.0 / TELEMETRY_HZ
 image_interval = 1.0 / IMAGE_HZ
@@ -230,4 +240,7 @@ except KeyboardInterrupt:
     print("\n[Dragon] Shutting down.")
     if CAMERA_AVAILABLE:
         cam.release()
-    conn.close()
+    with _conn_lock:
+        if _conn:
+            _conn.close()
+    _server.close()

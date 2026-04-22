@@ -617,6 +617,10 @@ class DragonGCS:
 
         # Keyboard control state
         self._keys = set()
+        self.ud = 0
+        self.lr = 0
+        self.thr = 0
+        
 
     def _load_fonts(self):
         try:
@@ -721,10 +725,13 @@ class DragonGCS:
     # ── Control send ─────────────────────────────────────────────────────────
 
     def _keyboard_axes(self):
-        ud  = (1.0 if pygame.K_w in self._keys else 0.0) - (1.0 if pygame.K_s in self._keys else 0.0)
-        lr  = (1.0 if pygame.K_d in self._keys else 0.0) - (1.0 if pygame.K_a in self._keys else 0.0)
-        thr = (1.0 if pygame.K_r in self._keys else 0.0) - (1.0 if pygame.K_f in self._keys else 0.0)
-        return ud, lr, thr
+        self.ud  += 0.1*(1.0 if pygame.K_w in self._keys else 0.0) - (1.0 if pygame.K_s in self._keys else 0.0)
+        self.lr  += 0.1*(1.0 if pygame.K_d in self._keys else 0.0) - (1.0 if pygame.K_a in self._keys else 0.0)
+        self.thr += 0.1*(1.0 if pygame.K_r in self._keys else 0.0) - (1.0 if pygame.K_f in self._keys else 0.0)
+        self.ud = clamp(self.ud,-1,1)
+        self.lr = clamp(self.lr,-1,1)
+        self.thd = clamp(self.thr,-1,1)
+        return self.ud, self.lr, self.thr
 
     def _send_control(self):
         now = time.time()
@@ -850,7 +857,8 @@ class DragonGCS:
         self.logger.close()
         pygame.quit()
 
-
+def clamp(n, min_val, max_val):
+    return max(min_val, min(n, max_val))
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
