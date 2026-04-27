@@ -264,13 +264,13 @@ class TelemetryOverlay(Overlay):
         pygame.draw.rect(panel, C_BORDER2, panel.get_rect(), 1)
 
         rows = [
-            ("DEPTH",    f"{tele.get('depth',    0.0):6.1f} m",   C_ACCENT),
-            ("PRESSURE", f"{tele.get('pressure', 0.0):6.2f} bar", C_TEXT),
-            ("TEMP",     f"{tele.get('temp',     0.0):6.1f} °C",  C_TEXT),
-            ("HEADING",  f"{tele.get('heading',  0.0):6.1f}°",    C_TEXT),
-            ("ROLL",     f"{tele.get('roll',     0.0):+6.1f}°",   C_TEXT),
-            ("PITCH",    f"{tele.get('pitch',    0.0):+6.1f}°",   C_TEXT),
-            ("CURRENT",  f"{tele.get('current',   0.0):+6.1f}",   C_TEXT)
+            # ("DEPTH",    f"{tele.get('depth',    0.0):6.1f} m",   C_ACCENT),
+            # ("PRESSURE", f"{tele.get('pressure', 0.0):6.2f} bar", C_TEXT),
+            # ("TEMP",     f"{tele.get('temp',     0.0):6.1f} °C",  C_TEXT),
+            # ("HEADING",  f"{tele.get('heading',  0.0):6.1f}°",    C_TEXT),
+            # ("ROLL",     f"{tele.get('roll',     0.0):+6.1f}°",   C_TEXT),
+            # ("PITCH",    f"{tele.get('pitch',    0.0):+6.1f}°",   C_TEXT),
+            ("CURRENT",  f"{tele.get('current',   10.0):+6.1f}",   C_TEXT)
         ]
 
         batt = tele.get("battery", None)

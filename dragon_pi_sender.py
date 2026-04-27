@@ -138,7 +138,7 @@ def apply_control(cmd: dict):
     Translate GCS command into thruster PWM signals.
     cmd keys: surge, sway, ascend, yaw, throttle, lights
     """
-    print(cmd)
+    # print(cmd)
     type  = cmd.get("control",  None)
     ud   = cmd.get("up/down",   0.0)
     lr = cmd.get("left/right", 0.0)
@@ -216,6 +216,14 @@ try:
         time.sleep(0.005)
 
 except KeyboardInterrupt:
+    print("\n[Dragon] Shutting down.")
+    if CAMERA_AVAILABLE:
+        cam.release()
+    with _conn_lock:
+        if _conn:
+            _conn.close()
+    _server.close()
+finally:
     print("\n[Dragon] Shutting down.")
     if CAMERA_AVAILABLE:
         cam.release()
