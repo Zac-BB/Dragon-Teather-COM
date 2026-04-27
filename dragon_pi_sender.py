@@ -31,9 +31,9 @@ TCP_PORT = 5000
 CAMERA_AVAILABLE = True
 CAMERA_WIDTH  = 640
 CAMERA_HEIGHT = 480
-CAMERA_JPEG_QUALITY = 50
+CAMERA_JPEG_QUALITY = 30
 TELEMETRY_HZ = 10   # times per second
-IMAGE_HZ     = 10    # frames per second
+IMAGE_HZ     = 30    # frames per second
 
 # MS5837 pressure/temp sensor (Bar30) — I2C address 0x76
 MS5837_ADDR = 0x76
