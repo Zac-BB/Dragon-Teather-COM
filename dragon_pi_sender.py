@@ -90,6 +90,8 @@ _server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 _server.bind((TCP_HOST, TCP_PORT))
 _server.listen(1)
 
+
+
 def _accept_loop():
     global _conn
     while True:
