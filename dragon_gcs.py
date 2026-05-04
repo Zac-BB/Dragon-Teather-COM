@@ -26,6 +26,8 @@ from datetime import datetime
 from PIL import Image
 import sys
 
+from read_controller import ControllerInput
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURATION
@@ -50,9 +52,6 @@ C_WARN      = (255, 180,  30)
 C_DANGER    = (255,  60,  60)
 C_GREEN     = (40,  220, 100)
 C_OVERLAY   = (8,   14,  22, 200)   # RGBA for overlay surfaces
-
-JOYSTICK_DEADZONE = 0.08
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGGER
@@ -178,61 +177,6 @@ class TCPManager:
             self.logger.log_event("status", {"message": msg.get("message", "")})
             if self.on_status:
                 self.on_status(msg.get("message", ""))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONTROLLER INPUT
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ControllerInput:
-    def __init__(self):
-        pygame.joystick.init()
-        self.joystick = None
-        self.axes = {}
-        self.buttons = {}
-        self.lights_on = False
-        self._init_joystick()
-
-    def _init_joystick(self):
-        count = pygame.joystick.get_count()
-        if count > 0:
-            self.joystick = pygame.joystick.Joystick(0)
-            self.joystick.init()
-
-    def refresh(self):
-        if self.joystick is None:
-            self._init_joystick()
-            return None
-        pygame.event.pump()
-        axes = {}
-        for i in range(self.joystick.get_numaxes()):
-            v = self.joystick.get_axis(i)
-            axes[i] = v if abs(v) > JOYSTICK_DEADZONE else 0.0
-        buttons = {}
-        for i in range(self.joystick.get_numbuttons()):
-            buttons[i] = self.joystick.get_button(i)
-
-        # Toggle lights on button 3
-        if buttons.get(3) and not self.buttons.get(3):
-            self.lights_on = not self.lights_on
-
-        self.axes = axes
-        self.buttons = buttons
-
-        # Map axes to ROV axes (customize per your controller)
-        return {
-            "type":    "control",
-            "up/down":   round(-axes.get(1, 0.0), 3),   # left stick Y → forward/back
-            "left/right":    round( axes.get(0, 0.0), 3),   # left stick X → strafe
-            "throttle":  round(-axes.get(3, 0.0), 3),   # right stick Y → up/down
-            # "yaw":     round( axes.get(2, 0.0), 3),   # right stick X → yaw
-            # "throttle":round( max(0, -axes.get(5, -1.0)) / 2 + 0.5, 3),  # L2 trigger
-            # "lights":  self.lights_on,
-        }
-
-    @property
-    def connected(self):
-        return self.joystick is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -373,7 +317,7 @@ class ControllerOverlay(Overlay):
         panel.blit(title, (10, 6))
 
         rows = [
-            ("Up/Down",   ctrl.get("up/down",  0)),
+            ("Down/Up",   ctrl.get("up/down",  0)),
             ("L/R",    ctrl.get("left/right",   0)),
             ("Throttle",  ctrl.get("throttle", 0)),
 
@@ -740,7 +684,7 @@ class DragonGCS:
             return
         self._last_ctrl_send = now
 
-        ctrl = self.controller.refresh()
+        ctrl = self.controller.get_control()
         self.state["controller_connected"] = self.controller.connected
 
         if ctrl is None:

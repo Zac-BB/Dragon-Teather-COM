@@ -2,10 +2,10 @@
 dragon_pi_sender.py — Run this on the Raspberry Pi aboard Dragon.
 
 Reads camera frames, sensor data, and sends over TCP to the GCS.
-Receives controller commands and drives motors.
+Receives controller commands and drives motors via Arduino serial.
 
 Dependencies:
-    pip install opencv-python smbus2
+    pip install opencv-python smbus2 pyserial
 
 Customize the sensor reads and motor driver sections for your hardware.
 """
@@ -24,6 +24,20 @@ try:
 except ImportError:
     I2C_AVAILABLE = False
 
+try:
+    import serial
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+
+try:
+    import pigpio
+    _pi = pigpio.pi()
+    PIGPIO_AVAILABLE = _pi.connected
+except Exception:
+    _pi = None
+    PIGPIO_AVAILABLE = False
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 TCP_HOST = "0.0.0.0"   # listen on all interfaces
@@ -35,8 +49,36 @@ CAMERA_JPEG_QUALITY = 30
 TELEMETRY_HZ = 10   # times per second
 IMAGE_HZ     = 30    # frames per second
 
-# MS5837 pressure/temp sensor (Bar30) — I2C address 0x76
-MS5837_ADDR = 0x76
+# ── Servo / ESC GPIO pins (BCM numbering) ────────────────────────────────────
+PIN_THRUST  = 17   # thruster ESC
+PIN_SERVO_1 = 27   # servo 1
+PIN_SERVO_2 = 22   # servo 2
+
+# PWM pulse-width ranges in microseconds (match Arduino values)
+MIN_THRUST,  MAX_THRUST  = 1000, 2000
+MIN_SERVO_1, MAX_SERVO_1 =  800, 2200
+MIN_SERVO_2, MAX_SERVO_2 =  800, 2200
+DEADBAND = 50        # µs either side of 1500 that snaps to neutral
+ALPHA    = 0.89      # low-pass filter gain (same as Arduino)
+
+# Filter state — persists between apply_control() calls
+_filt_thrust  = 1500.0
+_filt_servo_1 = 1500.0
+_filt_servo_2 = 1500.0
+_servo_lock   = threading.Lock()
+
+def _set_servo(pin, pw):
+    """Write pulse-width (µs) to a GPIO pin via pigpio, or print if unavailable."""
+    if PIGPIO_AVAILABLE:
+        _pi.set_servo_pulsewidth(pin, int(pw))
+    else:
+        print(f"[PWM] pin {pin} → {int(pw)} µs")
+
+def _apply_deadband(val, dead=DEADBAND):
+    """Snap values within ±dead of 1500 to exactly 1500."""
+    if 1500 - dead < val < 1500 + dead:
+        return 1500
+    return val
 
 # ── TCP Server ────────────────────────────────────────────────────────────────
 
@@ -113,15 +155,23 @@ def capture_jpeg() -> bytes:
         return buf.getvalue()
 
 # ── Sensors ───────────────────────────────────────────────────────────────────
+filtered_power_draw  =0
 
 def read_sensors():
 
     # TODO: replace with real I2C reads
+    alpha = 0.89
     t = time.time()
     pressure = 0.0
     depth    = 0.0
     temp     = 0.0
     current = 0.0
+    
+    # current_draw = analogRead(PIN_CURRENT)# read the current pin
+    # current_draw = (current_draw/1023)*5;           # scale from analog input to voltage
+    # current_draw = 187.5 * ((current_draw / 3.26) - 0.1) # convert from voltage to current reading
+    # power_draw = current_draw * (4.2*4)            # convert from amps to watts assuming fully charged 4s battery
+    # filtered_power_draw = alpha * power_draw + (1.0 - alpha) * filtered_power_draw
     return {
         "type": "telemetry",
         "battery": 10,
@@ -135,19 +185,47 @@ def read_sensors():
 
 def apply_control(cmd: dict):
     """
-    Translate GCS command into thruster PWM signals.
-    cmd keys: surge, sway, ascend, yaw, throttle, lights
+    Translate GCS command into servo/ESC PWM signals.
+
+    GCS sends -1.0 .. 1.0 for each axis:
+      throttle   → main thruster
+      up/down    → pitch  (left stick Y)
+      left/right → yaw    (left stick X)
+
+    Mixing (same as Arduino_Drive.ino):
+      servo_1 = pitch - yaw   (clamped ±1)
+      servo_2 = -pitch - yaw  (clamped ±1)
     """
-    # print(cmd)
-    type  = cmd.get("control",  None)
-    ud   = cmd.get("up/down",   0.0)
-    lr = cmd.get("left/right", 0.0)
-    thro    = cmd.get("throttle",    0.0)
-    
-    ud_pwm = ud * 1500 + 1500
-    
-    
-    pass
+    global _filt_thrust, _filt_servo_1, _filt_servo_2
+
+    thro  = cmd.get("throttle",    0.0)
+    pitch = cmd.get("up/down",     0.0)
+    yaw   = cmd.get("left/right",  0.0)
+
+    # Mixing
+    s1 = max(-1.0, min(1.0,  pitch - yaw))
+    s2 = max(-1.0, min(1.0, -pitch - yaw))
+
+    # Scale -1..1 to µs pulse-width
+    thrust_pw  = int((thro + 1.0) / 2.0 * (MAX_THRUST  - MIN_THRUST)  + MIN_THRUST)
+    # Servos are reversed: +1 → min, -1 → max (matches Arduino map(x, 100, -100, min, max))
+    servo_1_pw = int((-s1 + 1.0) / 2.0 * (MAX_SERVO_1 - MIN_SERVO_1) + MIN_SERVO_1)
+    servo_2_pw = int((-s2 + 1.0) / 2.0 * (MAX_SERVO_2 - MIN_SERVO_2) + MIN_SERVO_2)
+
+    # Deadband — snap to neutral if within ±DEADBAND µs of 1500
+    thrust_pw  = _apply_deadband(thrust_pw)
+    servo_1_pw = _apply_deadband(servo_1_pw)
+    servo_2_pw = _apply_deadband(servo_2_pw)
+
+    # Low-pass filter (same alpha as Arduino)
+    with _servo_lock:
+        _filt_thrust  = ALPHA * thrust_pw  + (1.0 - ALPHA) * _filt_thrust
+        _filt_servo_1 = ALPHA * servo_1_pw + (1.0 - ALPHA) * _filt_servo_1
+        _filt_servo_2 = ALPHA * servo_2_pw + (1.0 - ALPHA) * _filt_servo_2
+
+        _set_servo(PIN_THRUST,  _filt_thrust)
+        _set_servo(PIN_SERVO_1, _filt_servo_1)
+        _set_servo(PIN_SERVO_2, _filt_servo_2)
 
 # ── RX thread ─────────────────────────────────────────────────────────────────
 
