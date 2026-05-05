@@ -315,7 +315,7 @@ class ControllerOverlay(Overlay):
 
         title = self.fonts["small"].render("CONTROLS", True, C_TEXT_DIM)
         panel.blit(title, (10, 6))
-
+        print("controls: ",ctrl)
         rows = [
             ("Down/Up",   ctrl.get("up/down",  0)),
             ("L/R",    ctrl.get("left/right",   0)),

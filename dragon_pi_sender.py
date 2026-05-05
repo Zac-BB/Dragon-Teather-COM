@@ -85,11 +85,18 @@ if GPIO_AVAILABLE:
         pwm.start(7.5)            # start at neutral (1500 µs ≈ 7.5% duty)
         _servos[pin] = pwm
 
+def map_range(value, in_min, in_max, out_min, out_max, clamp=True):
+    scaled = (value - in_min) / (in_max - in_min)
+    result = out_min + scaled * (out_max - out_min)
+    if clamp:
+        lo, hi = min(out_min, out_max), max(out_min, out_max)
+        result = max(lo, min(hi, result))
+    
+    return result
 def _set_servo(pin, pw):
     """Write pulse-width (µs) to a GPIO pin via RPi.GPIO PWM."""
-    # Convert pulse width (µs) to duty cycle (%) at 50 Hz
-    # Period at 50 Hz = 20,000 µs, so duty% = (pw / 20000) * 100
-    duty = (pw / 20000.0) * 100
+
+    duty = map_range(pw,-1,1,500,2500)
     if GPIO_AVAILABLE and pin in _servos:
         _servos[pin].ChangeDutyCycle(duty)
     else:
