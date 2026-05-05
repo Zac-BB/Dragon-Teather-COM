@@ -51,9 +51,9 @@ TELEMETRY_HZ = 10   # times per second
 IMAGE_HZ     = 30    # frames per second
 
 # ── Servo / ESC GPIO pins (BCM numbering) ────────────────────────────────────
-PIN_THRUST  = 16   # thruster ESC
+PIN_THRUST  = 21   # thruster ESC
 PIN_SERVO_1 = 20   # servo 1
-PIN_SERVO_2 = 21   # servo 2
+PIN_SERVO_2 = 16   # servo 2
 
 # Flip this to switch servo PWM range
 SERVO_MODE = True   # True = hobby servo (500–2500 µs) | False = ESC (800–2200 µs)
