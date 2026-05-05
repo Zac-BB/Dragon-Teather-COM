@@ -96,7 +96,7 @@ def map_range(value, in_min, in_max, out_min, out_max, clamp=True):
 def _set_servo(pin, pw):
     """Write pulse-width (µs) to a GPIO pin via RPi.GPIO PWM."""
 
-    duty = map_range(pw,-1,1,0,100)
+    duty = map_range(pw, 1000, 2000, 5, 10)
     if GPIO_AVAILABLE and pin in _servos:
         _servos[pin].ChangeDutyCycle(duty)
     else:
