@@ -31,12 +31,13 @@ except ImportError:
     SERIAL_AVAILABLE = False
 
 try:
-    import pigpio
-    _pi = pigpio.pi()
-    PIGPIO_AVAILABLE = _pi.connected
-except Exception:
-    _pi = None
-    PIGPIO_AVAILABLE = False
+    import RPi.GPIO as GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    GPIO_AVAILABLE = True
+except ImportError:
+    GPIO_AVAILABLE = False
+    print("[WARN] RPi.GPIO not available — running in print-only mode")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -73,12 +74,24 @@ _filt_servo_1 = 1500.0
 _filt_servo_2 = 1500.0
 _servo_lock   = threading.Lock()
 
+
+_servos = {}
+if GPIO_AVAILABLE:
+    for pin in (PIN_THRUST, PIN_SERVO_1, PIN_SERVO_2):
+        GPIO.setup(pin, GPIO.OUT)
+        pwm = GPIO.PWM(pin, 50)   # 50 Hz for servos/ESCs
+        pwm.start(7.5)            # start at neutral (1500 µs ≈ 7.5% duty)
+        _servos[pin] = pwm
+
 def _set_servo(pin, pw):
-    """Write pulse-width (µs) to a GPIO pin via pigpio, or print if unavailable."""
-    if PIGPIO_AVAILABLE:
-        _pi.set_servo_pulsewidth(pin, int(pw))
+    """Write pulse-width (µs) to a GPIO pin via RPi.GPIO PWM."""
+    # Convert pulse width (µs) to duty cycle (%) at 50 Hz
+    # Period at 50 Hz = 20,000 µs, so duty% = (pw / 20000) * 100
+    duty = (pw / 20000.0) * 100
+    if GPIO_AVAILABLE and pin in _servos:
+        _servos[pin].ChangeDutyCycle(duty)
     else:
-        print(f"[PWM] pin {pin} → {int(pw)} µs")
+        print(f"[PWM] pin {pin} → {int(pw)} µs ({duty:.2f}% duty)")
 
 def _apply_deadband(val, dead=DEADBAND):
     """Snap values within ±dead of 1500 to exactly 1500."""
@@ -309,6 +322,10 @@ except KeyboardInterrupt:
         if _conn:
             _conn.close()
     _server.close()
+    if GPIO_AVAILABLE:
+        for pwm in _servos.values():
+            pwm.stop()
+        GPIO.cleanup()
 finally:
     print("\n[Dragon] Shutting down.")
     if CAMERA_AVAILABLE:
@@ -317,3 +334,7 @@ finally:
         if _conn:
             _conn.close()
     _server.close()
+    if GPIO_AVAILABLE:
+        for pwm in _servos.values():
+            pwm.stop()
+        GPIO.cleanup()
