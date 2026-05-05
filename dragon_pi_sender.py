@@ -58,13 +58,15 @@ PIN_SERVO_2 = 16   # servo 2
 # Flip this to switch servo PWM range
 SERVO_MODE = True   # True = hobby servo (500–2500 µs) | False = ESC (800–2200 µs)
 
-MIN_THRUST,  MAX_THRUST  = 1000, 2000          # thrust ESC always uses ESC range
+        # thrust ESC always uses ESC range
 if SERVO_MODE:
     MIN_SERVO_1, MAX_SERVO_1 = 500, 2500       # standard hobby servo
     MIN_SERVO_2, MAX_SERVO_2 = 500, 2500
+    MIN_THRUST,  MAX_THRUST  = 500, 2500
 else:
     MIN_SERVO_1, MAX_SERVO_1 = 800, 2200       # ESC / vectoring thruster
     MIN_SERVO_2, MAX_SERVO_2 = 800, 2200
+    MIN_THRUST,  MAX_THRUST  = 1000, 2000  
 DEADBAND = 50        # µs either side of 1500 that snaps to neutral
 ALPHA    = 0.89      # low-pass filter gain (same as Arduino)
 
