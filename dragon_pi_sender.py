@@ -205,7 +205,7 @@ def apply_control(cmd: dict):
       servo_2 = -pitch - yaw  (clamped ±1)
     """
     global _filt_thrust, _filt_servo_1, _filt_servo_2
-
+    print(cmd)
     thro  = cmd.get("throttle",    0.0)
     pitch = cmd.get("up/down",     0.0)
     yaw   = cmd.get("left/right",  0.0)
