@@ -50,9 +50,9 @@ TELEMETRY_HZ = 10   # times per second
 IMAGE_HZ     = 30    # frames per second
 
 # ── Servo / ESC GPIO pins (BCM numbering) ────────────────────────────────────
-PIN_THRUST  = 17   # thruster ESC
-PIN_SERVO_1 = 27   # servo 1
-PIN_SERVO_2 = 22   # servo 2
+PIN_THRUST  = 16   # thruster ESC
+PIN_SERVO_1 = 20   # servo 1
+PIN_SERVO_2 = 21   # servo 2
 
 # PWM pulse-width ranges in microseconds (match Arduino values)
 MIN_THRUST,  MAX_THRUST  = 1000, 2000
