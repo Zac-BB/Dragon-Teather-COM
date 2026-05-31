@@ -36,7 +36,7 @@ from read_controller import ControllerInput
 WINDOW_W = 1400
 WINDOW_H = 900
 FPS = 60
-TCP_HOST = "192.168.208.10"
+TCP_HOST = "dragon.local"
 TCP_PORT = 5000
 LOG_DIR = os.path.expanduser("~/dragon_logs")
 
@@ -139,7 +139,7 @@ class TCPManager:
         self.sock.settimeout(0.1)
         while self._running:
             try:
-                raw = self.sock.recv(4096).decode("utf-8", errors="replace")
+                raw = self.sock.recv(65536).decode("utf-8", errors="replace")
                 if not raw:
                     self.connected = False
                     break
@@ -215,6 +215,7 @@ class TelemetryOverlay(Overlay):
             # ("ROLL",     f"{tele.get('roll',     0.0):+6.1f}°",   C_TEXT),
             # ("PITCH",    f"{tele.get('pitch',    0.0):+6.1f}°",   C_TEXT),
             ("CURRENT",  f"{tele.get('current',   10.0):+6.1f}",   C_TEXT)
+            
         ]
 
         batt = tele.get("battery", None)
@@ -733,6 +734,39 @@ class DragonGCS:
         # All overlays
         for ov in self.overlays:
             ov.draw(self.screen, self.state)
+
+        # Leak warning
+        tele = self.state.get("telemetry", {})
+        if not tele.get("leak"):
+            warning_text = self.fonts["hud"].render("LEAK DETECTED", True, C_DANGER)
+
+            padding = 30
+            box_w = warning_text.get_width() + padding * 2
+            box_h = warning_text.get_height() + padding
+
+            box_x = (W - box_w) // 2
+            box_y = (H - box_h) // 2
+
+            # Semi-transparent warning box
+            warning_box = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+            warning_box.fill((120, 0, 0, 220))
+
+            pygame.draw.rect(
+                warning_box,
+                C_DANGER,
+                warning_box.get_rect(),
+                4,
+                border_radius=10
+            )
+
+            self.screen.blit(warning_box, (box_x, box_y))
+            self.screen.blit(
+                warning_text,
+                (
+                    box_x + (box_w - warning_text.get_width()) // 2,
+                    box_y + (box_h - warning_text.get_height()) // 2
+                )
+            )
 
         # Corner branding
         brand = self.fonts["hud"].render("DRAGON", True, C_BORDER)

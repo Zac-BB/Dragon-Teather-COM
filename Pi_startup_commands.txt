@@ -1,0 +1,3 @@
+source /home/dragon/Documents/dragon/Dragon-Teather-COM/venv/bin/activate
+cd Documents/dragon/Dragon-Teather-COM/
+python dragon_pi_sender.py

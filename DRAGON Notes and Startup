@@ -1,0 +1,37 @@
+DRAGON hostname: dragon.local
+- u: dragon
+- p: dragon
+
+pigpio daemon has been installed to remove servo jitter
+install location: /etc/systemd/system/pigpiod.service
+
+virtual environment on pi where packages are installed can be activated with: source /home/dragon/Documents/dragon/DRAGON-Teather/COM/venv/bin/activate
+
+**To vnc into Pi to update code, both laptop and Pi need to be tethered or on the same private wifi network (like a phone hotspot)**
+
+
+GROUND CONTROL SYSTEM (on laptop)
+
+Libraries are installed on a seperate conda environment called "gcs"
+- conda activate gcs
+
+
+
+
+
+***STARTUP INSTRUCTIONS:***
+- Power on Pi
+- Connect tether, ensure green lights on amplifier
+- Wait several minutes for pi to boot, meanwhile turn on game controller and ensure it connects to laptop
+- On laptop, open TigerVCN
+- Connect to VCN server: dragon.local  using username: dragon  and password: dragon
+- Through VCN on Pi, open terminal and startup_commands.txt
+- Copy-paste and run startup commands in Pi terminal. Wait a few seconds until it says "Sender running"
+- Open laptop terminal and copy-paste the following commands:
+
+conda activate gcs
+cd Dragon-Teather-COM/
+python dragon_gcs.py
+
+- Fullscreen the GCS, click anywhere on the screen to select the window, and press 'Enter'
+- GCS should now be running and connected

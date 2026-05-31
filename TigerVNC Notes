@@ -1,0 +1,24 @@
+USING TigerVNC TO REMOTE DESKTOP INTO RASPBERRY PI
+
+Both pi and client computer must be tethered via ethernet or connected to the same private wifi (use phone hotspot, not school wifi)
+
+Open TigerVNC Desktop application
+Type in hostname or IP address (found by typing "hostname -I" into Pi terminal)
+ - example hostname from DRAGON: dragon.local
+ - example IP address from DRAGON: 172.27.32.41
+ - if IP address changes, go google how to set a static IP address for a given wifi network on the Pi
+Click "yes" as many times as it pops up
+Enter username and password for pi (find username by typing "whoami" into Pi terminal)
+ - example username and password from DRAGON:
+ 	- u: dragon
+ 	- p: dragon
+ 	
+ 	
+TROUBLESHOOTING
+If TigerVNC fails to connect and freezes, open terminal and type:
+
+- ps aux | grep vncviewer
+
+look for the PID, which is the first 4 digit number. Then type:
+
+- kill <PID>

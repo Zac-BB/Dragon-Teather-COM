@@ -17,7 +17,6 @@ import base64
 import io
 import threading
 import math
-import pigpio
 
 try:
     import smbus2
@@ -57,7 +56,7 @@ PIN_SERVO_1 = 17   # servo 1
 PIN_SERVO_2 = 27   # servo 2
 
 # Flip this to switch servo PWM range
-SERVO_MODE = False   # True = hobby servo (500–2500 µs) | False = ESC (800–2200 µs)
+SERVO_MODE = True   # True = hobby servo (500–2500 µs) | False = ESC (800–2200 µs)
 
         # thrust ESC always uses ESC range
 if SERVO_MODE:
@@ -67,7 +66,7 @@ if SERVO_MODE:
 else:
     MIN_SERVO_1, MAX_SERVO_1 = 800, 2200       # ESC / vectoring thruster
     MIN_SERVO_2, MAX_SERVO_2 = 800, 2200
-    MIN_THRUST,  MAX_THRUST  = 990, 2010  
+    MIN_THRUST,  MAX_THRUST  = 1000, 2000  
 DEADBAND = 50        # µs either side of 1500 that snaps to neutral
 ALPHA    = 0.89      # low-pass filter gain (same as Arduino)
 
@@ -77,23 +76,31 @@ _filt_servo_1 = 1500.0
 _filt_servo_2 = 1500.0
 _servo_lock   = threading.Lock()
 
-# Connect to pigpio daemon to use pwm without stuttering
-pi = pigpio.pi()
-if not pi.connected:
-	print("Failed to connect to pigpio daemon")
-	exit()
 
-# Initialize servos to zero
-pi.set_servo_pulsewidth(PIN_SERVO_1, 1500)
-pi.set_servo_pulsewidth(PIN_SERVO_2, 1500)
-pi.set_servo_pulsewidth(PIN_THRUST, 1500)
-time.sleep(1)
+_servos = {}
+if GPIO_AVAILABLE:
+    for pin in (PIN_THRUST, PIN_SERVO_1, PIN_SERVO_2):
+        GPIO.setup(pin, GPIO.OUT)
+        pwm = GPIO.PWM(pin, 50)   # 50 Hz for servos/ESCs
+        pwm.start(7.5)            # start at neutral (1500 µs ≈ 7.5% duty)
+        _servos[pin] = pwm
 
-# ── Sensor Pins (BCM numbering) ────────────────────────────────────
-LEAK_PIN = 18
+def map_range(value, in_min, in_max, out_min, out_max, clamp=True):
+    scaled = (value - in_min) / (in_max - in_min)
+    result = out_min + scaled * (out_max - out_min)
+    if clamp:
+        lo, hi = min(out_min, out_max), max(out_min, out_max)
+        result = max(lo, min(hi, result))
+    
+    return result
+def _set_servo(pin, pw):
+    """Write pulse-width (µs) to a GPIO pin via RPi.GPIO PWM."""
 
-# Setup sensor input pins
-GPIO.setup(LEAK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    duty = map_range(pw, 1000, 2000, 5, 10)
+    if GPIO_AVAILABLE and pin in _servos:
+        _servos[pin].ChangeDutyCycle(duty)
+    else:
+        print(f"[PWM] pin {pin} → {int(pw)} µs ({duty:.2f}% duty)")
 
 def _apply_deadband(val, dead=DEADBAND):
     """Snap values within ±dead of 1500 to exactly 1500."""
@@ -189,7 +196,6 @@ def read_sensors():
     depth    = 0.0
     temp     = 0.0
     current = 0.0
-    leak = GPIO.input(LEAK_PIN)
     
     # current_draw = analogRead(PIN_CURRENT)# read the current pin
     # current_draw = (current_draw/1023)*5;           # scale from analog input to voltage
@@ -200,7 +206,6 @@ def read_sensors():
         "type": "telemetry",
         "battery": 10,
         "current": current,
-        "leak": leak,
         
         
     }
@@ -247,10 +252,10 @@ def apply_control(cmd: dict):
         _filt_thrust  = ALPHA * thrust_pw  + (1.0 - ALPHA) * _filt_thrust
         _filt_servo_1 = ALPHA * servo_1_pw + (1.0 - ALPHA) * _filt_servo_1
         _filt_servo_2 = ALPHA * servo_2_pw + (1.0 - ALPHA) * _filt_servo_2
-        
-        pi.set_servo_pulsewidth(PIN_THRUST, _filt_thrust)
-        pi.set_servo_pulsewidth(PIN_SERVO_1, _filt_servo_1)
-        pi.set_servo_pulsewidth(PIN_SERVO_2, _filt_servo_2)
+
+        _set_servo(PIN_THRUST,  _filt_thrust)
+        _set_servo(PIN_SERVO_1, _filt_servo_1)
+        _set_servo(PIN_SERVO_2, _filt_servo_2)
 
 # ── RX thread ─────────────────────────────────────────────────────────────────
 
@@ -261,7 +266,7 @@ def rx_loop(conn):
     conn.settimeout(0.1)
     while True:
         try:
-            raw = conn.recv(65536).decode("utf-8", errors="replace")
+            raw = conn.recv(4096).decode("utf-8", errors="replace")
             if not raw:
                 print("[Dragon] GCS disconnected.")
                 break
@@ -306,14 +311,12 @@ try:
             data = read_sensors()
             send(data)
             last_tele = now
-            
+
         if now - last_image >= image_interval:
             try:
                 jpeg = capture_jpeg()
-                b64  = base64.b64encode(jpeg).decode("ascii")
+                b64  = base64.b64encode(jpeg).decode()
                 send({"type": "image", "data": b64})
-            except AssertionError as e:
-                print(f"[Camera] {e}")
             except Exception as e:
                 print(f"[Camera] Error: {e}")
             last_image = now
@@ -328,8 +331,10 @@ except KeyboardInterrupt:
         if _conn:
             _conn.close()
     _server.close()
-    
-    
+    if GPIO_AVAILABLE:
+        for pwm in _servos.values():
+            pwm.stop()
+        GPIO.cleanup()
 finally:
     print("\n[Dragon] Shutting down.")
     if CAMERA_AVAILABLE:
@@ -338,8 +343,7 @@ finally:
         if _conn:
             _conn.close()
     _server.close()
-    pi.set_servo_pulsewidth(PIN_SERVO_1, 1500)
-    pi.set_servo_pulsewidth(PIN_SERVO_2, 1500)
-    pi.set_servo_pulsewidth(PIN_THRUST, 1500)
-    pi.stop()
-    GPIO.cleanup()
+    if GPIO_AVAILABLE:
+        for pwm in _servos.values():
+            pwm.stop()
+        GPIO.cleanup()
