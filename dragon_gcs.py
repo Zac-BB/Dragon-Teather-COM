@@ -94,25 +94,66 @@ class TCPManager:
         self.on_telemetry = None   # callback(dict)
         self.on_image = None       # callback(bytes)
         self.on_status = None      # callback(str)
+        self.on_conn_event = None  # callback(str) — connect/retry notices for the status bar
         self._partial = ""
 
+    def start(self, host: str, port: int, retry_interval: float = 1.0):
+        """Connect in the background, retrying every retry_interval seconds while disconnected."""
+        self.host = host
+        self.port = port
+        self._running = True
+        threading.Thread(target=self._connect_loop, args=(retry_interval,), daemon=True).start()
+
+    def _connect_loop(self, retry_interval: float):
+        last_error = None
+        while self._running:
+            if not self.connected:
+                error = self.connect(self.host, self.port)
+                if error is None:
+                    last_error = None
+                    self._notify(f"Connected to {self.host}:{self.port}")
+                elif error != last_error:
+                    # Only log/announce when the failure reason changes, not every retry
+                    last_error = error
+                    self.logger.log_event("tcp_error", {"error": error})
+                    self._notify(f"Waiting for {self.host}:{self.port} ({error}) — retrying every {retry_interval:g}s")
+            time.sleep(retry_interval)
+
+    def _notify(self, msg: str):
+        if self.on_conn_event:
+            self.on_conn_event(msg)
+
     def connect(self, host: str, port: int):
+        """Single connection attempt. Returns None on success, or the error string."""
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5.0)
-            self.sock.connect((host, port))
-            self.sock.settimeout(None)
-            self.host = host
-            self.port = port
-            self.connected = True
-            self._running = True
-            self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
-            self._rx_thread.start()
-            self.logger.log_event("tcp_connect", {"host": host, "port": port})
-            return True
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            sock.connect((host, port))
+            sock.settimeout(0.1)
         except Exception as e:
-            self.logger.log_event("tcp_error", {"error": str(e)})
-            return False
+            return str(e)
+        with self._lock:
+            self.sock = sock
+        self._partial = ""
+        self.connected = True
+        self._rx_thread = threading.Thread(target=self._rx_loop, args=(sock,), daemon=True)
+        self._rx_thread.start()
+        self.logger.log_event("tcp_connect", {"host": host, "port": port})
+        return None
+
+    def _drop(self, sock):
+        """Mark a connection dead so the connect loop retries."""
+        with self._lock:
+            if self.sock is not sock:
+                return
+            self.connected = False
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if self._running:
+            self.logger.log_event("tcp_connection_lost", {})
+            self._notify("Connection lost — reconnecting...")
 
     def disconnect(self):
         self._running = False
@@ -133,15 +174,14 @@ class TCPManager:
                 self.sock.sendall(line.encode())
         except Exception as e:
             self.logger.log_event("tcp_tx_error", {"error": str(e)})
-            self.connected = False
+            self._drop(self.sock)
 
-    def _rx_loop(self):
-        self.sock.settimeout(0.1)
-        while self._running:
+    def _rx_loop(self, sock):
+        while self._running and self.sock is sock:
             try:
-                raw = self.sock.recv(65536).decode("utf-8", errors="replace")
+                raw = sock.recv(65536).decode("utf-8", errors="replace")
                 if not raw:
-                    self.connected = False
+                    self._drop(sock)
                     break
                 self._partial += raw
                 while "\n" in self._partial:
@@ -157,7 +197,8 @@ class TCPManager:
             except socket.timeout:
                 continue
             except Exception:
-                time.sleep(0.05)
+                self._drop(sock)
+                break
 
     def _dispatch(self, msg: dict):
         t = msg.get("type")
@@ -660,13 +701,9 @@ class DragonGCS:
             self._statusbar.add_message("Demo mode active — no hardware required")
         else:
             host, port = TCP_HOST, TCP_PORT
-            ok = self.tcp.connect(host, port)
-            self.state["tcp_connected"] = ok
-            self.state["tcp_addr"] = f"{host}:{port}" if ok else "ERR"
-            if ok:
-                self._statusbar.add_message(f"Connected to {host}:{port}")
-            else:
-                self._statusbar.add_message(f"Failed to connect to {host}:{port}")
+            self.state["tcp_addr"] = f"{host}:{port}"
+            self.tcp.on_conn_event = self._statusbar.add_message
+            self.tcp.start(host, port)
 
     # ── Control send ─────────────────────────────────────────────────────────
 
@@ -737,7 +774,7 @@ class DragonGCS:
 
         # Leak warning
         tele = self.state.get("telemetry", {})
-        if not tele.get("leak"):
+        if tele.get("leak") == 0:   # only warn on an explicit leak reading from the Pi, not missing data
             warning_text = self.fonts["hud"].render("LEAK DETECTED", True, C_DANGER)
 
             padding = 30
