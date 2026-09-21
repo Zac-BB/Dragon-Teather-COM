@@ -14,7 +14,7 @@ import sys
 import os
 import pygame
 
-DEADZONE = 0.1
+DEADZONE = 0.15
 
 BUTTON_NAMES = {
     0:  "B",

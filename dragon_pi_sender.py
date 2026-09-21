@@ -47,7 +47,7 @@ TCP_PORT = 5000
 CAMERA_AVAILABLE = True
 CAMERA_WIDTH  = 640
 CAMERA_HEIGHT = 480
-CAMERA_JPEG_QUALITY = 30
+CAMERA_JPEG_QUALITY = 10
 TELEMETRY_HZ = 10   # times per second
 IMAGE_HZ     = 30    # frames per second
 
@@ -198,9 +198,9 @@ def read_sensors():
     # filtered_power_draw = alpha * power_draw + (1.0 - alpha) * filtered_power_draw
     return {
         "type": "telemetry",
-        "battery": 10,
+        "battery": 100,
         "current": current,
-        "leak": leak,
+        "leak": 0,
         
         
     }

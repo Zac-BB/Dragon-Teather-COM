@@ -38,7 +38,7 @@ WINDOW_H = 900
 FPS = 60
 TCP_HOST = "dragon.local"
 TCP_PORT = 5000
-LOG_DIR = os.path.expanduser("~/dragon_logs")
+LOG_DIR = os.path.expanduser("./dragon_logs")
 
 # Colors — deep-sea industrial palette
 C_BG        = (8,  14,  22)
